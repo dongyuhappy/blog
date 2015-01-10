@@ -25,7 +25,137 @@ InnoDB存储引擎是多线程模型.因为后台有多个不同的后台线程,
 - Page Cleaner Thread ，刷新脏页。
 
 ### Master Thread
-// TODO
+
+Master Thread具有最高线程的优先级别，在其内部有多个循环组成：
+
+- 主循环(loop)  
+- 后台循环(backgroup loop)  
+- 刷新循环(flush loop)  
+- 暂停循环(suspend loop)  
+
+Master Thread会根据数据库运行的状态在这些循环中进行切换。
+
+####主循环
+
+主循环有两大部分的操作--每10一次的和每秒一次的。
+用伪代码可以这样描述为:
+
+<pre>
+void main(){
+	loop();
+}
+
+
+
+//主循环
+void loop(){
+
+	//每秒进行一次的操作
+	for(int i = 0;i < 10;i++){
+		sleep(1)
+		//刷新重做日志
+		if(last_one_second_io < 5){
+			//最多进行5个插入缓冲的合并
+		}
+		if(脏页比例 > 设置的最大脏页比例){
+			//刷新100个脏页到磁盘
+		}
+		if(没有用户活动){
+			goto backgroupLoop()
+		}
+	}
+
+	//每10秒执行一次的操作
+	if(最近10秒的IO次数少于200){
+		//刷新100个脏页
+	}
+
+	//合并5个插入缓冲
+	//日志缓冲刷新到磁盘
+	//删除undo页
+
+	if(脏页比例>70%){
+		//刷新100个脏页
+	}else{
+		//刷新10个
+	}
+	if(没有活动用户){
+		goto backgroupLoop();
+	}
+
+
+
+
+
+}
+
+void backgroupLoop(){
+	//删除无用的undo页
+	//合并20个插入缓冲
+
+	if(有活动用户){
+		goto loop();
+	}else{
+		goto flushLoop()
+	}
+
+}
+
+void flushLoop(){
+	//刷新100个脏页
+
+	if(脏页比例 > 设置的最大脏页比例){
+		goto flushLoop()
+	}else{
+		goto suspendLoop();
+	}
+}
+
+void suspendLoop(){
+	//等待事件
+	if(有活动用户){
+		goto loop();
+	}
+
+}
+
+
+
+
+
+
+
+</pre>
+
+每秒一次的操作有:
+
+1. 重做日志刷新到磁盘。（一定）  
+2. 合并插入缓冲（可能，当前一秒内IO次数少于5次。）  
+3. 至多刷新100个InnoDB缓冲池中的脏页。（可能，脏页的数量大于innodb_max_dirty_pages_pct的配置）  
+4. 当前没有活动用户，切换到background loop。（可能）  
+
+每10秒一次的操作有：
+
+1. 刷新100个脏页到磁盘（可能，判断过去10秒内的IO操作是否少于200次）
+2. 合并至多5个插入缓冲。（总是）
+3. 将日志缓冲文件刷新到磁盘。（总是）
+4. 删除无用的undo页。（总是）
+5. 刷新100个或者10个脏页到磁盘。（总是）
+
+
+####backgroup loop
+
+当前没有用户活动称为数据库空闲，这时会进入background loop。
+
+执行的操作有：
+
+1. 删除无用的undo页。
+2. 合并20个插入缓冲。
+3. 跳到主循环。
+4. 不断刷新100个页，直到符合条件。（可能，跳到flush loop中完成）。
+
+如果flush loop中也没有事情可做则进入suspend_loop，将Master Thread挂起，等待事件发生。如果启动了innodb引擎，却没有任何的innodb表，那么Master Thread线程将被挂起。
+
 
 
 
@@ -290,6 +420,38 @@ InnoDB首先将重做日志放到这个缓冲区，然后再按照一定频率�
 
 ##数据以及日志文件的落地
 
+###CheckPoint技术
+
+为了缓解CPU速度和磁盘速度之间的鸿沟，页的操作都首先在内存里面进行。即内存中的数据要比磁盘上面的数据新。数据库需要将内存中的新版本数据刷新到磁盘，这个刷新操作不是每次都进行。为了避免发生数据丢失的情况，当前事物数据库系统普遍都采用了 Write Ahead Log策略。**即事物提交时，先写重做日志(redolog)，然后再修改页。**对于数据库宕机导致数据丢失时，都是通过重做日志来来完成数据恢复的。
+
+
+CheckPoint主要解决下面三个问题： 
+
+- 缩短数据库的恢复时间
+
+- 缓冲池不够用的时候刷新脏页到磁盘
+
+- 重做日志不可用时，刷新脏页。
+
+有了checkPoint技术，那么在数据库在恢复数据的时候就不需重做所有的redolog，只需要重做checkPoint之后的redolog进行恢复即可。
+
+对于InnoDB而言，它是通过LSN（long sequence Number）来标记版本的。每个页都有LSN，重做日志也有LSN，CheckPoint也有LSN。
+
+checkPoint所做的事情就是把缓冲池中的数据刷新到磁盘，不同之处在于每次刷新多少页，每次从哪里取脏页，以及什么时候触发CheckPoint，在InonoDB里面分为两种CheckPoint：
+
+- Sharp CheckPoint，数据关闭时把所有的脏页都刷新到磁盘，这是默认方式，配置参数为```innodb_fast_shutdown=1```
+
+- Fuzzy CheckPoint，只刷新一部分脏页到磁盘。在InnoDB内部使用的这种CheckPoint。
+
+可能出现Fuzzy CheckPoint的几种情况：
+
+- Master Thread CheckPoint，每秒或者10秒的速度刷新，这个过程是异步的。
+
+- FLUSH_LRU_LIST CheckPoint，当LRU列表的空闲页数少于n个时，会移除LRU尾端的页，那么这个时候会进行checkPoint。可以通过```innodb_lru_scan_depth```来控制LRU列表中空闲页的数量。1.2.x之前这个检查操作在用户查询线程中进行，之后在page cleaner线程中进行。
+
+- Async/Sync Flush CheckPoint。重做日志文件 不可用的情况下才进行。
+
+- Dirty Page too much CheckPoint，缓冲池中的脏页太多，可以通过```innodb_max_dirty_pages_pct```来设置。这是一个百分百参数。
 
 
 
