@@ -117,8 +117,60 @@ set @@global.lon_bin=on;
 
 - log-slave-update
 
-- binlog-format
+- binlog_format
+
+
+###max_bin_log_size
+
+指定单个文件的最大值，如果超过该值，则产生新的二进制文件。
+
+
+###binlog_cache_size
+
+当使用事物表的存储引擎时，所有未提交的二进制日志会被记录到一个缓存中去，等待该事物提交时直接将缓冲中得二进制日志写入二进制日志文件。该缓冲的大小就是binlog_cache_size决定的。默认为32k，binlog_cache_size是基于当前session，也就是每个session都会分配一个binlog_cache_size大小的缓冲。
+
+可以通过查看 binlog_cache_use,binlog_cache_disk_use的状态来判断binlog_cache_size是否合适。
+
+- binlog_cache_use，使用缓冲写二进制日志的次数
+
+- binlog_cache_disk_size，使用临时文件写二进制日志的次数。
+
+
+### sync_binlog
+ 
+默认情况下，二进制日志并不是每次都是在写的时候同步到磁盘。当数据库所在操作系统发生宕机的时候，可能会有最后一部分数据没有写入到二进制文件中。
+
+该sync_binlog的值表示每写缓冲多少次就同步到磁盘。sync_binlog=1表示采用同步写的方式写入到磁盘。该只默认为0。
+
+sync_binlog=1会导致未提交的时候被写入到binlog中，若此时宕机，由于没有commit，该事物会被回滚掉，但是binlog已经记录，下次恢复的时候，不能回滚，可以通过innodb_support_xa=1来设置。
+
+###binlog-do-db和binlog-ignore-db
+
+表示需要记录和忽略记录binlog的数据库，默认为空。
+
+###log-slave-update
+
+如果当前数据库的角色为slave，默认它将不会从master复制binlog到自己的binlog里面
+
+
+###bin_format
+
+配置binlog文件的格式，默认为STATEMENT,可配置的值有STATEMENT，ROW,MIXED。
+
+- STATEMENT，日志的逻辑SQL语句。事物的隔离级别为REPEATABLE READ级别。
+- ROW,记录表的行更改情况，事物的隔离级别为 READ COMMITTED。binlog日志文件的会更大。
+- MIXED，默认使用STATEMENT，下列情况会使用ROW：
+	- 表的存储引擎为NDB。
+	- 使用了UUID,USER,CURRENT_USER,FOUND_ROWS,ROW_COUNT等不确定函数
+	- 使用了INSERT DELAY
+	- 使用了用户自定义函数
+	- 使用了临时表
 
 
 
+###查看binlog
 
+使用mysqlbinlog工具查看
+```
+mysqlbinlog --start-position=开始位置 binlog路径
+```
