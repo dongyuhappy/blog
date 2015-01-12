@@ -11,7 +11,7 @@
 
 - 1.1.x之前是innodb模拟的AIO的方式
 
-- >=1.1.x开始使用系统的AIO，native AIO的方式。因为需要libaio库的支持。
+- \>=1.1.x开始使用系统的AIO，native AIO的方式。因为需要libaio库的支持。
 
 - 支持AIO的平台有Windows和linux，而mac osx不支持。
 
