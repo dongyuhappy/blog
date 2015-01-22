@@ -1,4 +1,4 @@
-#InnoDB文件分类
+#MySQL文件分类
 
 MySQL和InnoDB存储引擎表的各种类型文件可以分为：
 
