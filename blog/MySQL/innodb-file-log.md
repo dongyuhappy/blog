@@ -1,5 +1,6 @@
 #MySQL文件之日志文件
 
+
 MySQL常见的日志文件分为：
 
 - 错误日志(error log)
